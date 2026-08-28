@@ -58,8 +58,12 @@ async fn main() {
     // Load environment variables
     dotenvy::dotenv().ok();
     let config = config::Config::from_env();
-    
+    tiktok::client::configure(&config);
+
     tracing::info!("🦀 RustyTok starting on port {}", config.port);
+    if config.api_verify_fp.is_some() {
+        tracing::info!("Antibot API_VERIFYFP cookie enabled");
+    }
 
     // Build router
     let app = Router::new()
