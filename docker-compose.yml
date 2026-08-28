@@ -1,0 +1,6 @@
+services:
+  rustytok:
+    build: .
+    ports:
+      # HTTP
+      - "3000:3000"
