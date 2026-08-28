@@ -28,5 +28,5 @@ async fn get_tag(Path(tag_name): Path<String>) -> Result<impl IntoResponse, AppE
 
 pub fn router() -> Router {
     Router::new()
-        .route("/tag/{tag_name}", get(get_tag))
+        .route("/tag/:tag_name", get(get_tag))
 }

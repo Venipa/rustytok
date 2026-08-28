@@ -28,5 +28,5 @@ async fn get_user(Path(username): Path<String>) -> Result<impl IntoResponse, App
 
 pub fn router() -> Router {
     Router::new()
-        .route("/@{username}", get(get_user))
+        .route("/:username", get(get_user))
 }

@@ -1,0 +1,10 @@
+# Cargo / Rust
+/target/
+/debug/
+**/*.rs.bk
+*.pdb
+**/mutants.out*/
+rustc-ice-*.txt
+
+# Build / release artifacts
+/dist/

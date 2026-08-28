@@ -25,5 +25,5 @@ async fn get_video(Path(video_id): Path<String>) -> Result<impl IntoResponse, Ap
 
 pub fn router() -> Router {
     Router::new()
-        .route("/video/{video_id}", get(get_video))
+        .route("/video/:video_id", get(get_video))
 }
