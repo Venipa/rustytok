@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
+use url::Url;
 
 use crate::error::AppError;
 use crate::tiktok::client::get_http_client;
@@ -18,40 +19,38 @@ pub struct ProxyQuery {
 
 /// Proxy media (video/images) through our server to prevent TikTok tracking
 async fn proxy_media(Query(params): Query<ProxyQuery>) -> Result<impl IntoResponse, AppError> {
+    // Axum already percent-decodes query values; decode once more if double-encoded
     let url = urlencoding::decode(&params.url)
         .map_err(|_| AppError::InvalidUrl)?
-        .to_string();
-    
-    // Only allow TikTok CDN URLs
+        .into_owned();
+
     if !is_allowed_url(&url) {
         return Err(AppError::InvalidUrl);
     }
-    
+
     tracing::debug!("Proxying media: {}", url);
-    
+
     let client = get_http_client();
     let response = client
         .get(&url)
         .send()
         .await
         .map_err(|e| AppError::FetchError(e.to_string()))?;
-    
+
     if !response.status().is_success() {
         return Err(AppError::NotFound);
     }
-    
-    // Get content type
+
     let content_type = response
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
-    
-    // Stream the response body
+
     let stream = response.bytes_stream();
     let body = Body::from_stream(stream);
-    
+
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
@@ -61,18 +60,52 @@ async fn proxy_media(Query(params): Query<ProxyQuery>) -> Result<impl IntoRespon
 }
 
 fn is_allowed_url(url: &str) -> bool {
-    // Only allow TikTok CDN domains
-    let allowed_domains = [
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+
+    // Exact / subdomain match for known CDNs
+    const SUFFIXES: &[&str] = &[
         "tiktokcdn.com",
         "tiktokcdn-us.com",
+        "tiktokcdn-eu.com",
+        "tiktokcdn-in.com",
         "tiktokv.com",
         "muscdn.com",
         "byteoversea.com",
         "ibytedtos.com",
-        "tiktokcdn-in.com",
     ];
-    
-    allowed_domains.iter().any(|domain| url.contains(domain))
+
+    SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+        // Regional variants like p16-common-sign.tiktokcdn-eu.com
+        || host.contains("tiktokcdn")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_allowed_url;
+
+    #[test]
+    fn allows_eu_tiktokcdn() {
+        assert!(is_allowed_url(
+            "https://p16-common-sign.tiktokcdn-eu.com/tos-useast2a-avt-0068-euttp/x.jpeg?x-signature=abc%3D"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_cdn() {
+        assert!(!is_allowed_url("https://example.com/image.jpeg"));
+        assert!(!is_allowed_url("http://tiktokcdn.com/x.jpeg"));
+    }
 }
 
 pub fn router() -> Router {
