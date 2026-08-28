@@ -42,7 +42,7 @@
 <section class="videos">
     <h2>Videos</h2>
     <div class="video-grid">
-        {% for video in &user.videos %}
+        {% for video in user.videos %}
         <a href="/video/{{ video.id }}" class="video-card">
             {% if !video.thumbnail_url.is_empty() %}
             <img src="{{ video.proxied_thumbnail_url() }}" alt="{{ video.description }}" loading="lazy">
