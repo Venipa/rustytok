@@ -70,6 +70,7 @@ fn is_allowed_url(url: &str) -> bool {
         return false;
     };
     let host = host.to_ascii_lowercase();
+    let path = parsed.path();
 
     // Exact / subdomain match for known CDNs
     const SUFFIXES: &[&str] = &[
@@ -88,6 +89,9 @@ fn is_allowed_url(url: &str) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
         // Regional variants like p16-common-sign.tiktokcdn-eu.com
         || host.contains("tiktokcdn")
+        // Stream hosts e.g. v16-webapp-prime.tiktok.com/video/tos/...
+        || ((host == "tiktok.com" || host.ends_with(".tiktok.com"))
+            && path.starts_with("/video/tos"))
 }
 
 #[cfg(test)]
@@ -102,9 +106,18 @@ mod tests {
     }
 
     #[test]
+    fn allows_webapp_prime_video() {
+        assert!(is_allowed_url(
+            "https://v16-webapp-prime.tiktok.com/video/tos/no1a/tos-no1a-ve-0068c001-no/abc?a=1988"
+        ));
+    }
+
+    #[test]
     fn rejects_non_cdn() {
         assert!(!is_allowed_url("https://example.com/image.jpeg"));
         assert!(!is_allowed_url("http://tiktokcdn.com/x.jpeg"));
+        assert!(!is_allowed_url("https://www.tiktok.com/@user/video/123"));
+        assert!(!is_allowed_url("https://www.tiktok.com/video/123"));
     }
 }
 
