@@ -46,7 +46,7 @@ docker run -p 3000:3000 rustytok
 |-------------|-------------|
 | `/` | Home page with search |
 | `/@username` | View user profile |
-| `/video/VIDEO_ID` | View single video |
+| `/@username/video/VIDEO_ID` | View single video |
 | `/tag/hashtag` | View hashtag feed |
 
 ### LibRedirect Setup

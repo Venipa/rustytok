@@ -36,7 +36,7 @@ async fn home(Query(params): Query<SearchQuery>) -> impl IntoResponse {
                 return Redirect::to(&path).into_response();
             }
         } else if q.chars().all(|c| c.is_ascii_digit()) {
-            // Video ID
+            // Bare video id — page needs /@user/video/id
             return Redirect::to(&format!("/video/{}", q)).into_response();
         } else {
             // Assume username without @

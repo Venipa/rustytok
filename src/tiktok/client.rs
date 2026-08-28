@@ -80,9 +80,10 @@ pub async fn fetch_user(username: &str) -> Result<UserInfo, AppError> {
     parser::parse_user_page(&html, username)
 }
 
-/// Fetch single video
-pub async fn fetch_video(video_id: &str) -> Result<VideoInfo, AppError> {
-    let url = format!("https://www.tiktok.com/video/{}", video_id);
+/// Fetch single video via `/@user/video/{id}` (current TikTok web URL)
+pub async fn fetch_video(username: &str, video_id: &str) -> Result<VideoInfo, AppError> {
+    let username = username.trim_start_matches('@');
+    let url = format!("https://www.tiktok.com/@{}/video/{}", username, video_id);
 
     let response = tiktok_get(&url)
         .send()
