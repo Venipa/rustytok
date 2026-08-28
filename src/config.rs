@@ -7,6 +7,8 @@ pub struct Config {
     pub api_verify_fp: Option<String>,
     /// Device id for TikTok requests, same as ProxiTok `API_DEVICE_ID`
     pub api_device_id: Option<String>,
+    /// Session cookie required for webapp-prime video CDN (`tk=tt_chain_token`)
+    pub api_tt_chain_token: Option<String>,
 }
 
 impl Config {
@@ -18,6 +20,7 @@ impl Config {
                 .expect("PORT must be a number"),
             api_verify_fp: env_nonempty("API_VERIFYFP"),
             api_device_id: env_nonempty("API_DEVICE_ID"),
+            api_tt_chain_token: env_nonempty("API_TT_CHAIN_TOKEN"),
         }
     }
 }

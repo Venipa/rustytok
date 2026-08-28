@@ -187,10 +187,22 @@ fn parse_video_item(item: &Value) -> Option<VideoInfo> {
     let video = item.get("video").unwrap_or(&Value::Null);
     let music = item.get("music");
     
-    // Get video URL - try multiple possible locations
-    let video_url = video.get("playAddr")
-        .or_else(|| video.get("downloadAddr"))
+    // Prefer downloadAddr (often less picky); playAddr needs tt_chain_token cookie
+    let video_url = video
+        .get("downloadAddr")
+        .or_else(|| video.get("playAddr"))
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            video
+                .get("bitrateInfo")
+                .and_then(|b| b.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|b| b.get("PlayAddr"))
+                .and_then(|p| p.get("UrlList"))
+                .and_then(|u| u.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.as_str())
+        })
         .unwrap_or("");
     
     let thumbnail_url = video.get("cover")

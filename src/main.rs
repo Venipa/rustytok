@@ -64,6 +64,9 @@ async fn main() {
     if config.api_verify_fp.is_some() {
         tracing::info!("Antibot API_VERIFYFP cookie enabled");
     }
+    if config.api_tt_chain_token.is_some() {
+        tracing::info!("API_TT_CHAIN_TOKEN cookie enabled");
+    }
 
     // Build router
     let app = Router::new()

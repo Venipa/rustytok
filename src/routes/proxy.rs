@@ -33,12 +33,21 @@ async fn proxy_media(Query(params): Query<ProxyQuery>) -> Result<impl IntoRespon
     let client = get_http_client();
     let response = client
         .get(&url)
+        .header(header::REFERER, "https://www.tiktok.com/")
+        .header(header::ORIGIN, "https://www.tiktok.com")
+        .header(header::ACCEPT, "*/*")
         .send()
         .await
         .map_err(|e| AppError::FetchError(e.to_string()))?;
 
-    if !response.status().is_success() {
-        return Err(AppError::NotFound);
+    let status = response.status();
+    if !status.is_success() {
+        tracing::warn!("Upstream media {} returned {}", url, status);
+        return Err(if status.as_u16() == 404 {
+            AppError::NotFound
+        } else {
+            AppError::FetchError(format!("CDN status: {status}"))
+        });
     }
 
     let content_type = response
