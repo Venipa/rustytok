@@ -26,5 +26,8 @@ impl Config {
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
-    env::var(key).ok().filter(|v| !v.is_empty())
+    env::var(key)
+        .ok()
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .filter(|v| !v.is_empty())
 }
