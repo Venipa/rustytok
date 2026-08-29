@@ -6,13 +6,13 @@
 <section class="video-page">
     <div class="video-container">
         {% if !video.video_url.is_empty() %}
-        <video controls autoplay loop playsinline poster="{{ video.proxied_thumbnail_url() }}">
-            <source src="{{ video.proxied_video_url() }}" type="video/mp4">
+        <video controls autoplay loop playsinline preload="auto" poster="{{ video.proxied_thumbnail_url() }}"
+            src="{{ video.proxied_video_url() }}">
             Your browser does not support the video tag.
         </video>
         {% else %}
         <div class="video-placeholder">
-            <p>Video could not be loaded</p>
+            <p>Video stream URL missing (TikTok may have gated this post).</p>
             {% if !video.thumbnail_url.is_empty() %}
             <img src="{{ video.proxied_thumbnail_url() }}" alt="Thumbnail">
             {% endif %}

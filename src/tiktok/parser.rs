@@ -157,6 +157,13 @@ fn parse_video_from_json(json: &Value, video_id: &str) -> Option<VideoInfo> {
     // Try __DEFAULT_SCOPE__ structure
     if let Some(scope) = json.get("__DEFAULT_SCOPE__") {
         if let Some(video_detail) = scope.get("webapp.video-detail") {
+            let status = video_detail
+                .get("statusCode")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
+            if status != 0 {
+                tracing::warn!("webapp.video-detail statusCode={}", status);
+            }
             if let Some(item_info) = video_detail.get("itemInfo") {
                 if let Some(item_struct) = item_info.get("itemStruct") {
                     return parse_video_item(item_struct);
@@ -164,21 +171,62 @@ fn parse_video_from_json(json: &Value, video_id: &str) -> Option<VideoInfo> {
             }
         }
     }
-    
+
     // Try ItemModule structure
     if let Some(item_module) = json.get("ItemModule") {
         if let Some(item) = item_module.get(video_id) {
             return parse_video_item(item);
         }
-        // Sometimes there's only one item
         if let Some(items) = item_module.as_object() {
             if let Some((_, item)) = items.iter().next() {
                 return parse_video_item(item);
             }
         }
     }
-    
+
     None
+}
+
+/// playAddr / downloadAddr may be a string or `{ "UrlList": ["https://..."] }`
+fn extract_addr_url(value: &Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        let s = s.trim();
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+        return None;
+    }
+    value
+        .get("UrlList")
+        .and_then(|u| u.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn best_bitrate_url(video: &Value) -> Option<String> {
+    let infos = video.get("bitrateInfo")?.as_array()?;
+    let mut best: Option<(i64, String)> = None;
+    for info in infos {
+        let bitrate = info
+            .get("Bitrate")
+            .or_else(|| info.get("bitrate"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let play = info
+            .get("PlayAddr")
+            .or_else(|| info.get("playAddr"))?;
+        let Some(url) = extract_addr_url(play) else {
+            continue;
+        };
+        if best.as_ref().map(|(b, _)| bitrate > *b).unwrap_or(true) {
+            best = Some((bitrate, url));
+        }
+    }
+    best.map(|(_, url)| url)
 }
 
 fn parse_video_item(item: &Value) -> Option<VideoInfo> {
@@ -186,46 +234,74 @@ fn parse_video_item(item: &Value) -> Option<VideoInfo> {
     let stats = item.get("stats").unwrap_or(&Value::Null);
     let video = item.get("video").unwrap_or(&Value::Null);
     let music = item.get("music");
-    
-    // Prefer downloadAddr (often less picky); playAddr needs tt_chain_token cookie
-    let video_url = video
-        .get("downloadAddr")
-        .or_else(|| video.get("playAddr"))
-        .and_then(|v| v.as_str())
-        .or_else(|| {
-            video
-                .get("bitrateInfo")
-                .and_then(|b| b.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|b| b.get("PlayAddr"))
-                .and_then(|p| p.get("UrlList"))
-                .and_then(|u| u.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|v| v.as_str())
+
+    // Prefer bitrate streams, then playAddr, then downloadAddr (skip empty strings)
+    let video_url = best_bitrate_url(video)
+        .or_else(|| video.get("playAddr").and_then(extract_addr_url))
+        .or_else(|| video.get("downloadAddr").and_then(extract_addr_url))
+        .unwrap_or_default();
+
+    if video_url.is_empty() {
+        tracing::warn!("No playable URL in itemStruct.video (slideshow or gated?)");
+    }
+
+    let thumbnail_url = video
+        .get("cover")
+        .and_then(extract_addr_url)
+        .or_else(|| video.get("originCover").and_then(extract_addr_url))
+        .or_else(|| video.get("dynamicCover").and_then(extract_addr_url))
+        .unwrap_or_default();
+
+    let create_time = item
+        .get("createTime")
+        .and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_u64().map(|n| n as i64))
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
         })
-        .unwrap_or("");
-    
-    let thumbnail_url = video.get("cover")
-        .or_else(|| video.get("originCover"))
-        .or_else(|| video.get("dynamicCover"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    
+        .unwrap_or(0);
+
     Some(VideoInfo {
-        id: item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        id: item
+            .get("id")
+            .and_then(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .or_else(|| v.as_u64().map(|n| n.to_string()))
+            })
+            .unwrap_or_default(),
         description: item.get("desc").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        author_username: author.get("uniqueId").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-        author_nickname: author.get("nickname").and_then(|v| v.as_str()).unwrap_or("Unknown").to_string(),
-        author_avatar: author.get("avatarMedium").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        video_url: video_url.to_string(),
-        thumbnail_url: thumbnail_url.to_string(),
+        author_username: author
+            .get("uniqueId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        author_nickname: author
+            .get("nickname")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_string(),
+        author_avatar: author
+            .get("avatarMedium")
+            .or_else(|| author.get("avatarLarger"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        video_url,
+        thumbnail_url,
         like_count: stats.get("diggCount").and_then(|v| v.as_u64()).unwrap_or(0),
         comment_count: stats.get("commentCount").and_then(|v| v.as_u64()).unwrap_or(0),
         share_count: stats.get("shareCount").and_then(|v| v.as_u64()).unwrap_or(0),
         view_count: stats.get("playCount").and_then(|v| v.as_u64()).unwrap_or(0),
-        create_time: item.get("createTime").and_then(|v| v.as_i64()).unwrap_or(0),
-        music_title: music.and_then(|m| m.get("title")).and_then(|v| v.as_str()).map(String::from),
-        music_author: music.and_then(|m| m.get("authorName")).and_then(|v| v.as_str()).map(String::from),
+        create_time,
+        music_title: music
+            .and_then(|m| m.get("title"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        music_author: music
+            .and_then(|m| m.get("authorName"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
     })
 }
 
@@ -274,6 +350,40 @@ fn parse_tag_from_json(json: &Value, tag_name: &str) -> Option<TagInfo> {
             });
         }
     }
-    
+
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{best_bitrate_url, extract_addr_url};
+    use serde_json::json;
+
+    #[test]
+    fn addr_from_string_skips_empty() {
+        assert_eq!(
+            extract_addr_url(&json!("https://cdn/x.mp4")).as_deref(),
+            Some("https://cdn/x.mp4")
+        );
+        assert!(extract_addr_url(&json!("")).is_none());
+    }
+
+    #[test]
+    fn addr_from_url_list_object() {
+        let v = json!({"UrlList": ["", "https://cdn/a.mp4", "https://cdn/b.mp4"]});
+        assert_eq!(extract_addr_url(&v).as_deref(), Some("https://cdn/a.mp4"));
+    }
+
+    #[test]
+    fn prefers_highest_bitrate() {
+        let video = json!({
+            "downloadAddr": "",
+            "playAddr": "",
+            "bitrateInfo": [
+                {"Bitrate": 100, "PlayAddr": {"UrlList": ["https://low.mp4"]}},
+                {"Bitrate": 900, "PlayAddr": {"UrlList": ["https://high.mp4"]}}
+            ]
+        });
+        assert_eq!(best_bitrate_url(&video).as_deref(), Some("https://high.mp4"));
+    }
 }
