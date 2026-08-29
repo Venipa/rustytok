@@ -33,21 +33,63 @@ pub struct VideoInfo {
 }
 
 impl VideoInfo {
-    /// Get proxied video URL
+    /// Get proxied video URL (includes fallback download filename metadata)
     pub fn proxied_video_url(&self) -> String {
-        format!("/proxy?url={}", urlencoding::encode(&self.video_url))
+        let mut url = format!("/proxy?url={}", urlencoding::encode(&self.video_url));
+        if !self.author_username.is_empty() {
+            url.push_str(&format!(
+                "&user={}",
+                urlencoding::encode(&self.author_username)
+            ));
+        }
+        let title: String = self
+            .description
+            .chars()
+            .take(80)
+            .collect::<String>()
+            .trim()
+            .to_string();
+        if !title.is_empty() {
+            url.push_str(&format!("&title={}", urlencoding::encode(&title)));
+        }
+        if !self.id.is_empty() {
+            url.push_str(&format!("&id={}", urlencoding::encode(&self.id)));
+        }
+        url
     }
-    
-    /// Get proxied thumbnail URL  
+
+    /// Get proxied thumbnail URL
     pub fn proxied_thumbnail_url(&self) -> String {
-        format!("/proxy?url={}", urlencoding::encode(&self.thumbnail_url))
+        let mut url = format!("/proxy?url={}", urlencoding::encode(&self.thumbnail_url));
+        if !self.author_username.is_empty() {
+            url.push_str(&format!(
+                "&user={}",
+                urlencoding::encode(&self.author_username)
+            ));
+        }
+        if !self.id.is_empty() {
+            url.push_str(&format!(
+                "&title={}",
+                urlencoding::encode(&format!("{}-thumb", self.id))
+            ));
+            url.push_str(&format!("&id={}", urlencoding::encode(&self.id)));
+        }
+        url
     }
 }
 
 impl UserInfo {
     /// Get proxied avatar URL
     pub fn proxied_avatar_url(&self) -> String {
-        format!("/proxy?url={}", urlencoding::encode(&self.avatar_url))
+        let mut url = format!("/proxy?url={}", urlencoding::encode(&self.avatar_url));
+        if !self.username.is_empty() {
+            url.push_str(&format!("&user={}", urlencoding::encode(&self.username)));
+        }
+        url.push_str("&title=avatar");
+        if !self.id.is_empty() {
+            url.push_str(&format!("&id={}", urlencoding::encode(&self.id)));
+        }
+        url
     }
 }
 

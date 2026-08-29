@@ -1,7 +1,7 @@
 use axum::{
     body::Body,
     extract::Query,
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -17,6 +17,10 @@ pub struct ProxyQuery {
     url: String,
     /// Optional per-request tt_chain_token override
     ttc: Option<String>,
+    /// Fallback filename pieces: [@user] title/id.ext
+    user: Option<String>,
+    title: Option<String>,
+    id: Option<String>,
 }
 
 /// Proxy media (video/images) through our server to prevent TikTok tracking
@@ -94,12 +98,21 @@ async fn proxy_media(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
 
+    let filename = resolve_filename(
+        response.headers().get(header::CONTENT_DISPOSITION),
+        &params,
+        &content_type,
+        &url,
+    );
+    let content_disposition = format!("inline; filename=\"{filename}\"");
+
     let stream = response.bytes_stream();
     let body = Body::from_stream(stream);
 
     let mut builder = Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_DISPOSITION, content_disposition)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "public, max-age=3600");
 
@@ -111,6 +124,126 @@ async fn proxy_media(
     }
 
     Ok(builder.body(body).unwrap())
+}
+
+fn resolve_filename(
+    upstream_cd: Option<&HeaderValue>,
+    params: &ProxyQuery,
+    content_type: &str,
+    url: &str,
+) -> String {
+    if let Some(name) = filename_from_content_disposition(upstream_cd) {
+        return name;
+    }
+
+    let ext = ext_from_content_type(content_type)
+        .or_else(|| ext_from_url(url))
+        .unwrap_or("bin");
+
+    let user = params
+        .user
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("unknown");
+    let label = params
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            params
+                .id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("media");
+
+    format!(
+        "[@{}] {}.{}",
+        sanitize_filename(user),
+        sanitize_filename(label),
+        ext
+    )
+}
+
+fn filename_from_content_disposition(header: Option<&HeaderValue>) -> Option<String> {
+    let raw = header?.to_str().ok()?;
+    // Prefer filename*=UTF-8''... then filename="..."
+    if let Some(idx) = raw.to_ascii_lowercase().find("filename*=") {
+        let value = raw[idx + "filename*=".len()..].trim();
+        let value = value.split(';').next()?.trim();
+        let value = value.trim_matches('"');
+        if let Some(encoded) = value.split("''").nth(1) {
+            let decoded = urlencoding::decode(encoded).ok()?.into_owned();
+            let name = sanitize_filename(&decoded);
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
+    if let Some(idx) = raw.to_ascii_lowercase().find("filename=") {
+        let value = raw[idx + "filename=".len()..].trim();
+        let value = value.split(';').next()?.trim();
+        let value = value.trim_matches('"');
+        let name = sanitize_filename(value);
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn sanitize_filename(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\n' | '\r' | '\0' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect::<String>()
+        .trim()
+        .trim_matches('.')
+        .to_string()
+}
+
+fn ext_from_content_type(content_type: &str) -> Option<&'static str> {
+    let mime = content_type.split(';').next()?.trim().to_ascii_lowercase();
+    Some(match mime.as_str() {
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "video/quicktime" => "mov",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "audio/mpeg" => "mp3",
+        _ => return None,
+    })
+}
+
+fn ext_from_url(url: &str) -> Option<&'static str> {
+    let path = Url::parse(url).ok()?.path().to_ascii_lowercase();
+    if path.contains(".mp4") || url.contains("mime_type=video_mp4") {
+        Some("mp4")
+    } else if path.contains(".webm") {
+        Some("webm")
+    } else if path.contains(".jpg") || path.contains(".jpeg") {
+        Some("jpg")
+    } else if path.contains(".png") {
+        Some("png")
+    } else if path.contains(".webp") {
+        Some("webp")
+    } else {
+        None
+    }
 }
 
 fn is_allowed_url(url: &str) -> bool {
@@ -147,7 +280,11 @@ fn is_allowed_url(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_allowed_url;
+    use super::{
+        ext_from_content_type, filename_from_content_disposition, is_allowed_url, resolve_filename,
+        sanitize_filename, ProxyQuery,
+    };
+    use axum::http::HeaderValue;
 
     #[test]
     fn allows_eu_tiktokcdn() {
@@ -169,6 +306,74 @@ mod tests {
         assert!(!is_allowed_url("http://tiktokcdn.com/x.jpeg"));
         assert!(!is_allowed_url("https://www.tiktok.com/@user/video/123"));
         assert!(!is_allowed_url("https://www.tiktok.com/video/123"));
+    }
+
+    #[test]
+    fn fallback_filename_uses_user_and_title() {
+        let params = ProxyQuery {
+            url: String::new(),
+            ttc: None,
+            user: Some("zushi".into()),
+            title: Some("cool clip".into()),
+            id: Some("123".into()),
+        };
+        assert_eq!(
+            resolve_filename(None, &params, "video/mp4", "https://x/video.mp4"),
+            "[@zushi] cool clip.mp4"
+        );
+    }
+
+    #[test]
+    fn fallback_filename_uses_id_when_no_title() {
+        let params = ProxyQuery {
+            url: String::new(),
+            ttc: None,
+            user: Some("zushi".into()),
+            title: None,
+            id: Some("7677".into()),
+        };
+        assert_eq!(
+            resolve_filename(None, &params, "video/mp4", "https://x"),
+            "[@zushi] 7677.mp4"
+        );
+    }
+
+    #[test]
+    fn prefers_upstream_content_disposition() {
+        let cd = HeaderValue::from_static("inline; filename=\"from-cdn.mp4\"");
+        let params = ProxyQuery {
+            url: String::new(),
+            ttc: None,
+            user: Some("zushi".into()),
+            title: Some("ignored".into()),
+            id: None,
+        };
+        assert_eq!(
+            resolve_filename(Some(&cd), &params, "video/mp4", "https://x"),
+            "from-cdn.mp4"
+        );
+    }
+
+    #[test]
+    fn parses_quoted_filename() {
+        let cd = HeaderValue::from_static("attachment; filename=\"a b.mp4\"");
+        assert_eq!(
+            filename_from_content_disposition(Some(&cd)).as_deref(),
+            Some("a b.mp4")
+        );
+    }
+
+    #[test]
+    fn sanitizes_path_chars() {
+        assert_eq!(sanitize_filename("a/b:c?.mp4"), "a_b_c_.mp4");
+    }
+
+    #[test]
+    fn maps_content_type_ext() {
+        assert_eq!(
+            ext_from_content_type("video/mp4; charset=binary"),
+            Some("mp4")
+        );
     }
 }
 
